@@ -1,0 +1,11 @@
+{
+  "Version": 1,
+  "Hash": "QcKGINmf6xxLdW22HDUw3p74+SvqYFhKRfk0K0OAop8=",
+  "Source": "FluxOrchestrator.Api",
+  "BasePath": "_content/FluxOrchestrator.Api",
+  "Mode": "Default",
+  "ManifestType": "Build",
+  "ReferencedProjectsConfiguration": [],
+  "DiscoveryPatterns": [],
+  "Assets": []
+}
