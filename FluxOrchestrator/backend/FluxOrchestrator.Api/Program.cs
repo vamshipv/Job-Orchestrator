@@ -1,10 +1,11 @@
 using FluxOrchestrator.Api.Data;
 using FluxOrchestrator.Api.Models;
+using FluxOrchestrator.Api.Services;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// 1. Register OpenAPI / Swagger for interactive testing in the browser
+// 1. Register OpenAPI / Swagger
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
@@ -17,9 +18,14 @@ builder.Services.AddSwaggerGen(options =>
 });
 
 // 2. Register EF Core In-Memory Database
-builder.Services.AddDbContext<AppDbContext>(options => options.UseInMemoryDatabase("FluxOrchestratorDb"));
+builder.Services.AddDbContext<AppDbContext>(options =>
+    options.UseInMemoryDatabase("FluxOrchestratorDb"));
 
-// 3. Configure CORS so Angular and React can communicate with this API
+// 3. Register our Day 2 Queue and Background Worker
+builder.Services.AddSingleton<JobExecutionQueue>();
+builder.Services.AddHostedService<PipelineExecutionWorker>();
+
+// 4. Configure CORS so Angular and React can communicate with this API
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
@@ -32,7 +38,7 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// 4. Configure HTTP Request Pipeline
+// Configure HTTP Request Pipeline
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -44,7 +50,7 @@ if (app.Environment.IsDevelopment())
 
 app.UseCors("AllowAll");
 
-// --- Minimal API Endpoints ---
+// Minimal API Endpoints
 
 // GET /api/pipelines - Returns all pipeline definitions
 app.MapGet("/api/pipelines", async (AppDbContext db) =>
@@ -72,6 +78,53 @@ app.MapPost("/api/pipelines", async (PipelineDefinition newPipeline, AppDbContex
     return Results.Created($"/api/pipelines/{newPipeline.Id}", newPipeline);
 })
 .WithName("CreatePipeline");
+
+// POST /api/pipelines/{id}/trigger - Enqueues a new pipeline run asynchronously
+app.MapPost("/api/pipelines/{id:guid}/trigger", async (Guid id, AppDbContext db, JobExecutionQueue queue) =>
+{
+    var pipeline = await db.Pipelines.FindAsync(id);
+    if (pipeline is null)
+    {
+        return Results.NotFound(new { error = $"Pipeline with ID '{id}' was not found." });
+    }
+
+    // 1. Create a new PipelineRun record with all steps initialized to 'Pending'
+    var run = new PipelineRun
+    {
+        RunId = Guid.NewGuid(),
+        PipelineId = pipeline.Id,
+        Status = PipelineRunStatus.Queued,
+        StartedAt = DateTime.UtcNow,
+        StepStatuses = pipeline.Steps.Select(step => new StepExecutionStatus
+        {
+            StepId = step.StepId,
+            State = ExecutionState.Pending
+        }).ToList()
+    };
+
+    db.Runs.Add(run);
+    await db.SaveChangesAsync();
+
+    // 2. Drop the RunId into the Channel queue (non-blocking handoff!)
+    await queue.EnqueueRunAsync(run.RunId);
+
+    // 3. Return 202 Accepted immediately with the RunId
+    return Results.Accepted($"/api/runs/{run.RunId}", new
+    {
+        runId = run.RunId,
+        status = run.Status.ToString(),
+        message = "Pipeline run queued successfully."
+    });
+})
+.WithName("TriggerPipeline");
+
+// GET /api/runs/{runId} - Check the real-time status of a run
+app.MapGet("/api/runs/{runId:guid}", async (Guid runId, AppDbContext db) =>
+{
+    var run = await db.Runs.FindAsync(runId);
+    return run is not null ? Results.Ok(run) : Results.NotFound();
+})
+.WithName("GetRunStatus");
 
 // --- Seed Initial Pipelines on Startup ---
 using (var scope = app.Services.CreateScope())
