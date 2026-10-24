@@ -1,4 +1,5 @@
 using FluxOrchestrator.Api.Data;
+using FluxOrchestrator.Api.Hubs;
 using FluxOrchestrator.Api.Models;
 using FluxOrchestrator.Api.Services;
 using Microsoft.EntityFrameworkCore;
@@ -21,18 +22,22 @@ builder.Services.AddSwaggerGen(options =>
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseInMemoryDatabase("FluxOrchestratorDb"));
 
-// 3. Register our Day 2 Queue and Background Worker
+// 3. Register our Queue and Background Worker
 builder.Services.AddSingleton<JobExecutionQueue>();
 builder.Services.AddHostedService<PipelineExecutionWorker>();
 
-// 4. Configure CORS so Angular and React can communicate with this API
+// 4. Register SignalR
+builder.Services.AddSignalR();
+
+// 5. Configure CORS (Configured specifically to support SignalR WebSockets & Credentials)
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAll", policy =>
+    options.AddPolicy("AllowFrontend", policy =>
     {
-        policy.AllowAnyOrigin()
+        policy.SetIsOriginAllowed(_ => true) // Allows any local dev port (4200, 3000, 5173)
               .AllowAnyHeader()
-              .AllowAnyMethod();
+              .AllowAnyMethod()
+              .AllowCredentials();
     });
 });
 
@@ -48,9 +53,16 @@ if (app.Environment.IsDevelopment())
     });
 }
 
-app.UseCors("AllowAll");
+app.UseCors("AllowFrontend");
 
+// ==========================================
+// SignalR Hub Endpoint
+// ==========================================
+app.MapHub<PipelineHub>("/hubs/pipeline");
+
+// ==========================================
 // Minimal API Endpoints
+// ==========================================
 
 // GET /api/pipelines - Returns all pipeline definitions
 app.MapGet("/api/pipelines", async (AppDbContext db) =>
@@ -79,7 +91,7 @@ app.MapPost("/api/pipelines", async (PipelineDefinition newPipeline, AppDbContex
 })
 .WithName("CreatePipeline");
 
-// POST /api/pipelines/{id}/trigger - Enqueues a new pipeline run asynchronously
+// POST /api/pipelines/{id}/trigger - Enqueues a new pipeline run
 app.MapPost("/api/pipelines/{id:guid}/trigger", async (Guid id, AppDbContext db, JobExecutionQueue queue) =>
 {
     var pipeline = await db.Pipelines.FindAsync(id);
@@ -88,7 +100,6 @@ app.MapPost("/api/pipelines/{id:guid}/trigger", async (Guid id, AppDbContext db,
         return Results.NotFound(new { error = $"Pipeline with ID '{id}' was not found." });
     }
 
-    // 1. Create a new PipelineRun record with all steps initialized to 'Pending'
     var run = new PipelineRun
     {
         RunId = Guid.NewGuid(),
@@ -105,10 +116,9 @@ app.MapPost("/api/pipelines/{id:guid}/trigger", async (Guid id, AppDbContext db,
     db.Runs.Add(run);
     await db.SaveChangesAsync();
 
-    // 2. Drop the RunId into the Channel queue (non-blocking handoff!)
+    // Hand off to the background channel
     await queue.EnqueueRunAsync(run.RunId);
 
-    // 3. Return 202 Accepted immediately with the RunId
     return Results.Accepted($"/api/runs/{run.RunId}", new
     {
         runId = run.RunId,
@@ -118,7 +128,7 @@ app.MapPost("/api/pipelines/{id:guid}/trigger", async (Guid id, AppDbContext db,
 })
 .WithName("TriggerPipeline");
 
-// GET /api/runs/{runId} - Check the real-time status of a run
+// GET /api/runs/{runId} - Check status of a run
 app.MapGet("/api/runs/{runId:guid}", async (Guid runId, AppDbContext db) =>
 {
     var run = await db.Runs.FindAsync(runId);

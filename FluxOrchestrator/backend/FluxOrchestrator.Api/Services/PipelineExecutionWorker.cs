@@ -1,22 +1,31 @@
 using FluxOrchestrator.Api.Data;
+using FluxOrchestrator.Api.Hubs;
 using FluxOrchestrator.Api.Models;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
 namespace FluxOrchestrator.Api.Services;
 
 /// <summary>
-/// A long-running background worker that processes pipeline runs in DAG dependency order.
+/// A long-running background worker that processes pipeline runs in DAG dependency order
+/// and broadcasts real-time progress and logs to connected SignalR clients.
 /// </summary>
 public class PipelineExecutionWorker : BackgroundService
 {
     private readonly JobExecutionQueue _queue;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IHubContext<PipelineHub> _hubContext;
     private readonly ILogger<PipelineExecutionWorker> _logger;
 
-    public PipelineExecutionWorker(JobExecutionQueue queue, IServiceScopeFactory scopeFactory, ILogger<PipelineExecutionWorker> logger)
+    public PipelineExecutionWorker(
+        JobExecutionQueue queue,
+        IServiceScopeFactory scopeFactory,
+        IHubContext<PipelineHub> hubContext,
+        ILogger<PipelineExecutionWorker> logger)
     {
         _queue = queue;
         _scopeFactory = scopeFactory;
+        _hubContext = hubContext;
         _logger = logger;
     }
 
@@ -24,7 +33,6 @@ public class PipelineExecutionWorker : BackgroundService
     {
         _logger.LogInformation("Pipeline Execution Worker is running and waiting for jobs...");
 
-        // Continuously read queued run IDs as they arrive
         await foreach (var runId in _queue.ReadAllAsync(stoppingToken))
         {
             try
@@ -40,7 +48,6 @@ public class PipelineExecutionWorker : BackgroundService
 
     private async Task ProcessPipelineRunAsync(Guid runId, CancellationToken cancellationToken)
     {
-        // 1. Create a scoped DbContext for this execution unit of work
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
@@ -60,32 +67,32 @@ public class PipelineExecutionWorker : BackgroundService
             return;
         }
 
-        // 2. Mark the run as Running
+        // 1. Mark run as Running
         run.Status = PipelineRunStatus.Running;
         run.StartedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
-        _logger.LogInformation("Starting execution of Pipeline '{Name}' (RunId: {RunId})", pipeline.Name, runId);
 
-        // Map for fast step definition lookup
+        var runRoom = runId.ToString();
+
+        // Broadcast initial run start log
+        await BroadcastLogAsync(runRoom, "system", $"[START] Pipeline '{pipeline.Name}' initiated.", "info");
+
         var stepDefs = pipeline.Steps.ToDictionary(s => s.StepId);
 
-        // 3. Execution Loop: Continue until all steps are finished
+        // 2. DAG Execution Loop
         while (!cancellationToken.IsCancellationRequested)
         {
-            // Find all pending steps whose dependencies have ALL succeeded
             var readySteps = run.StepStatuses
                 .Where(s => s.State == ExecutionState.Pending)
                 .Where(s =>
                 {
                     var def = stepDefs[s.StepId];
-                    // If no dependencies, it's ready. If it has dependencies, all must be Succeeded.
                     return def.DependsOn.Count == 0 ||
                            def.DependsOn.All(depId =>
                                run.StepStatuses.Any(other => other.StepId == depId && other.State == ExecutionState.Succeeded));
                 })
                 .ToList();
 
-            // If no steps are ready, check if all steps are completed
             if (readySteps.Count == 0)
             {
                 var anyRunning = run.StepStatuses.Any(s => s.State == ExecutionState.Running);
@@ -93,49 +100,93 @@ public class PipelineExecutionWorker : BackgroundService
 
                 if (!anyRunning && !anyPending)
                 {
-                    // Everything is finished!
-                    break;
+                    break; // All steps finished!
                 }
 
-                // If some steps are running, wait a short moment and check again
-                await Task.Delay(500, cancellationToken);
+                await Task.Delay(300, cancellationToken);
                 continue;
             }
 
-            // 4. Execute the ready steps concurrently
-            var stepTasks = readySteps.Select(step => ExecuteStepAsync(step, stepDefs[step.StepId], db, cancellationToken));
+            // Execute ready steps concurrently
+            var stepTasks = readySteps.Select(step => 
+                ExecuteStepAsync(runId, step, stepDefs[step.StepId], db, cancellationToken));
             await Task.WhenAll(stepTasks);
 
-            // Save updated states to DB after this batch finishes
             await db.SaveChangesAsync(cancellationToken);
         }
 
-        // 5. Finalize Run Status
+        // 3. Finalize Run Status
         var hasFailed = run.StepStatuses.Any(s => s.State == ExecutionState.Failed);
         run.Status = hasFailed ? PipelineRunStatus.Failed : PipelineRunStatus.Succeeded;
         run.CompletedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
 
-        _logger.LogInformation("Finished Pipeline '{Name}' (RunId: {RunId}) with status: {Status}", 
-            pipeline.Name, runId, run.Status);
+        // Broadcast completion to SignalR clients
+        await _hubContext.Clients.Group(runRoom).SendAsync("PipelineCompleted", new
+        {
+            runId = run.RunId,
+            status = run.Status.ToString(),
+            completedAt = run.CompletedAt
+        }, cancellationToken);
+
+        await BroadcastLogAsync(runRoom, "system", $"[COMPLETE] Pipeline finished with status: {run.Status}", "success");
     }
 
-    private async Task ExecuteStepAsync(StepExecutionStatus stepStatus, PipelineStepDefinition stepDef, AppDbContext db,
+    private async Task ExecuteStepAsync(
+        Guid runId,
+        StepExecutionStatus stepStatus,
+        PipelineStepDefinition stepDef,
+        AppDbContext db,
         CancellationToken cancellationToken)
     {
-        // Transition: Pending -> Running
+        var runRoom = runId.ToString();
+
+        // A. Transition to Running
         stepStatus.State = ExecutionState.Running;
         stepStatus.StartedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
-        _logger.LogInformation("--> Step '{StepName}' started (Duration: {Seconds}s)", stepDef.Name, stepDef.EstimatedSeconds);
 
-        // Simulate actual work based on the step's estimated seconds
-        await Task.Delay(stepDef.EstimatedSeconds * 1000, cancellationToken);
+        // Broadcast to WebSocket: Step is now running!
+        await _hubContext.Clients.Group(runRoom).SendAsync("StepStatusUpdated", new
+        {
+            runId,
+            stepId = stepDef.StepId,
+            state = "Running",
+            timestamp = DateTime.UtcNow
+        }, cancellationToken);
 
-        // Transition: Running -> Succeeded
+        await BroadcastLogAsync(runRoom, stepDef.StepId, $"--> Started step '{stepDef.Name}' (Estimated: {stepDef.EstimatedSeconds}s)", "info");
+
+        // B. Simulate real work & stream an in-progress log line
+        await Task.Delay((stepDef.EstimatedSeconds * 1000) / 2, cancellationToken);
+        await BroadcastLogAsync(runRoom, stepDef.StepId, $"[PROCESSING] Executing payload for '{stepDef.Name}'...", "info");
+        await Task.Delay((stepDef.EstimatedSeconds * 1000) / 2, cancellationToken);
+
+        // C. Transition to Succeeded
         stepStatus.State = ExecutionState.Succeeded;
         stepStatus.CompletedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
-        _logger.LogInformation("<-- Step '{StepName}' completed successfully", stepDef.Name);
+
+        // Broadcast to WebSocket: Step succeeded!
+        await _hubContext.Clients.Group(runRoom).SendAsync("StepStatusUpdated", new
+        {
+            runId,
+            stepId = stepDef.StepId,
+            state = "Succeeded",
+            timestamp = DateTime.UtcNow
+        }, cancellationToken);
+
+        await BroadcastLogAsync(runRoom, stepDef.StepId, $"<-- Completed step '{stepDef.Name}' successfully.", "success");
+    }
+
+    private async Task BroadcastLogAsync(string room, string stepId, string message, string level)
+    {
+        await _hubContext.Clients.Group(room).SendAsync("LogStreamed", new
+        {
+            stepId,
+            message,
+            level,
+            timestamp = DateTime.UtcNow.ToString("HH:mm:ss")
+        });
     }
 }
