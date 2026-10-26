@@ -1,0 +1,76 @@
+<div class="catalog-container">
+  <header class="catalog-header">
+    <div>
+      <h1 class="title">Workflows & Pipelines</h1>
+      <p class="subtitle">Select a pipeline definition to trigger background DAG execution.</p>
+    </div>
+    <button class="btn btn-secondary" (click)="loadPipelines()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
+      </svg>
+      <span>Refresh</span>
+    </button>
+  </header>
+
+  <!-- Error Alert -->
+  @if (errorMessage()) {
+    <div class="alert alert-error">
+      <span>{{ errorMessage() }}</span>
+    </div>
+  }
+
+  <!-- Loading State -->
+  @if (isLoading()) {
+    <div class="loading-state">
+      <div class="spinner"></div>
+      <p>Loading pipelines from .NET API...</p>
+    </div>
+  } @else {
+    <!-- Pipeline Cards Grid -->
+    <div class="pipeline-grid">
+      @for (pipeline of pipelines(); track pipeline.id) {
+        <div class="pipeline-card">
+          <div class="card-header">
+            <h3 class="pipeline-name">{{ pipeline.name }}</h3>
+            <span class="step-badge">{{ pipeline.steps.length }} Steps</span>
+          </div>
+
+          <p class="pipeline-desc">{{ pipeline.description }}</p>
+
+          <div class="steps-preview">
+            <span class="preview-title">Execution Sequence</span>
+            <div class="steps-list">
+              @for (step of pipeline.steps; track step.stepId; let isLast = $last) {
+                <span class="step-tag">
+                  {{ step.name }}
+                  <span class="duration">{{ step.estimatedSeconds }}s</span>
+                </span>
+                @if (!isLast) {
+                  <span class="arrow">→</span>
+                }
+              }
+            </div>
+          </div>
+
+          <div class="card-footer">
+            <button 
+              class="btn btn-primary" 
+              [disabled]="triggeringId() === pipeline.id"
+              (click)="onTrigger(pipeline)"
+            >
+              @if (triggeringId() === pipeline.id) {
+                <span>Queueing Run...</span>
+              } @else {
+                <span>Run Pipeline</span>
+              }
+            </button>
+          </div>
+        </div>
+      } @empty {
+        <div class="empty-state">
+          <p>No pipeline definitions found in backend database.</p>
+        </div>
+      }
+    </div>
+  }
+</div>

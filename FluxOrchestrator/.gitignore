@@ -1,0 +1,21 @@
+# .NET build artifacts
+**/bin/
+**/obj/
+*.dll
+*.exe
+*.pdb
+
+# Node / Angular
+**/node_modules/
+**/.angular/
+**/dist/
+
+# VS Code & IDE settings
+.vscode/
+.idea/
+*.user
+*.suo
+
+# OS files
+.DS_Store
+Thumbs.db
