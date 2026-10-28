@@ -1,0 +1,251 @@
+.monitor-container {
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.breadcrumb {
+  margin-bottom: 1.5rem;
+
+  .back-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: #64748b;
+    text-decoration: none;
+    font-size: 0.875rem;
+    font-weight: 500;
+    transition: color 0.15s ease;
+
+    &:hover {
+      color: #0f172a;
+    }
+  }
+}
+
+.overview-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 1.75rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  margin-bottom: 2rem;
+
+  .overview-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 1.5rem;
+
+    .eyebrow {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      color: #64748b;
+    }
+
+    .run-title {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: #0f172a;
+      margin: 0.25rem 0 0;
+    }
+  }
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.3rem 0.75rem;
+  border-radius: 9999px;
+
+  .status-indicator-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+  }
+
+  &.badge-queued {
+    background: #fef3c7;
+    color: #b45309;
+    border: 1px solid #fde68a;
+    .status-indicator-dot { background: #d97706; }
+  }
+
+  &.badge-running {
+    background: #eff6ff;
+    color: #1d4ed8;
+    border: 1px solid #bfdbfe;
+    .status-indicator-dot { 
+      background: #2563eb; 
+      animation: pulse 1.5s infinite;
+    }
+  }
+
+  &.badge-succeeded {
+    background: #ecfdf5;
+    color: #047857;
+    border: 1px solid #a7f3d0;
+    .status-indicator-dot { background: #059669; }
+  }
+
+  &.badge-failed {
+    background: #fef2f2;
+    color: #b91c1c;
+    border: 1px solid #fecaca;
+    .status-indicator-dot { background: #dc2626; }
+  }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(1.3); }
+}
+
+.progress-section {
+  margin: 1.25rem 0;
+
+  .progress-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #475569;
+    margin-bottom: 0.5rem;
+  }
+
+  .progress-track {
+    height: 8px;
+    background: #f1f5f9;
+    border-radius: 9999px;
+    overflow: hidden;
+
+    .progress-fill {
+      height: 100%;
+      background: #2563eb;
+      border-radius: 9999px;
+      transition: width 0.3s ease;
+    }
+  }
+}
+
+.stats-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid #f1f5f9;
+
+  .stat-item {
+    display: flex;
+    flex-direction: column;
+
+    .stat-label {
+      font-size: 0.75rem;
+      color: #64748b;
+      margin-bottom: 0.2rem;
+    }
+
+    .stat-value {
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: #0f172a;
+    }
+  }
+}
+
+.steps-section {
+  .section-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #0f172a;
+    margin-bottom: 1rem;
+  }
+}
+
+.steps-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+.step-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 1.25rem;
+  transition: all 0.2s ease;
+
+  &.card-running {
+    border-color: #93c5fd;
+    box-shadow: 0 0 0 1px #93c5fd;
+  }
+
+  &.card-succeeded {
+    border-left: 4px solid #10b981;
+  }
+
+  .step-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.75rem;
+
+    .step-index {
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: #94a3b8;
+    }
+  }
+
+  .step-name {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #0f172a;
+    margin: 0 0 0.75rem;
+  }
+
+  .step-timing {
+    font-size: 0.75rem;
+    color: #64748b;
+
+    .running-text {
+      color: #2563eb;
+      font-weight: 600;
+    }
+  }
+}
+
+.state-chip {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+
+  &.chip-pending {
+    background: #f1f5f9;
+    color: #64748b;
+  }
+
+  &.chip-running {
+    background: #eff6ff;
+    color: #2563eb;
+  }
+
+  &.chip-succeeded {
+    background: #ecfdf5;
+    color: #059669;
+  }
+
+  &.chip-failed {
+    background: #fef2f2;
+    color: #dc2626;
+  }
+}
+
+.font-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}

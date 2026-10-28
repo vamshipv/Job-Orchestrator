@@ -7,8 +7,8 @@ using Microsoft.EntityFrameworkCore;
 namespace FluxOrchestrator.Api.Services;
 
 /// <summary>
-/// A long-running background worker that processes pipeline runs in DAG dependency order
-/// and broadcasts real-time progress and logs to connected SignalR clients.
+/// A long-running background worker that processes pipeline runs in DAG dependency order.
+/// Uses SemaphoreSlim to synchronize database writes across concurrent parallel tasks.
 /// </summary>
 public class PipelineExecutionWorker : BackgroundService
 {
@@ -51,6 +51,9 @@ public class PipelineExecutionWorker : BackgroundService
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
+        // An async lock to prevent parallel tasks from calling DbContext at the same exact millisecond
+        using var dbLock = new SemaphoreSlim(1, 1);
+
         var run = await db.Runs.FindAsync([runId], cancellationToken);
         if (run == null)
         {
@@ -73,8 +76,6 @@ public class PipelineExecutionWorker : BackgroundService
         await db.SaveChangesAsync(cancellationToken);
 
         var runRoom = runId.ToString();
-
-        // Broadcast initial run start log
         await BroadcastLogAsync(runRoom, "system", $"[START] Pipeline '{pipeline.Name}' initiated.", "info");
 
         var stepDefs = pipeline.Steps.ToDictionary(s => s.StepId);
@@ -107,19 +108,27 @@ public class PipelineExecutionWorker : BackgroundService
                 continue;
             }
 
-            // Execute ready steps concurrently
+            // Execute ready steps concurrently with safe database synchronization
             var stepTasks = readySteps.Select(step => 
-                ExecuteStepAsync(runId, step, stepDefs[step.StepId], db, cancellationToken));
+                ExecuteStepAsync(runId, run, step, stepDefs[step.StepId], db, dbLock, cancellationToken));
             await Task.WhenAll(stepTasks);
-
-            await db.SaveChangesAsync(cancellationToken);
         }
 
         // 3. Finalize Run Status
         var hasFailed = run.StepStatuses.Any(s => s.State == ExecutionState.Failed);
         run.Status = hasFailed ? PipelineRunStatus.Failed : PipelineRunStatus.Succeeded;
         run.CompletedAt = DateTime.UtcNow;
-        await db.SaveChangesAsync(cancellationToken);
+
+        await dbLock.WaitAsync(cancellationToken);
+        try
+        {
+            db.Entry(run).Property(r => r.StepStatuses).IsModified = true;
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        finally
+        {
+            dbLock.Release();
+        }
 
         // Broadcast completion to SignalR clients
         await _hubContext.Clients.Group(runRoom).SendAsync("PipelineCompleted", new
@@ -134,19 +143,30 @@ public class PipelineExecutionWorker : BackgroundService
 
     private async Task ExecuteStepAsync(
         Guid runId,
+        PipelineRun run,
         StepExecutionStatus stepStatus,
         PipelineStepDefinition stepDef,
         AppDbContext db,
+        SemaphoreSlim dbLock,
         CancellationToken cancellationToken)
     {
         var runRoom = runId.ToString();
 
-        // A. Transition to Running
-        stepStatus.State = ExecutionState.Running;
-        stepStatus.StartedAt = DateTime.UtcNow;
-        await db.SaveChangesAsync(cancellationToken);
+        // A. Transition to Running (Lock DB for 1ms to save state)
+        await dbLock.WaitAsync(cancellationToken);
+        try
+        {
+            stepStatus.State = ExecutionState.Running;
+            stepStatus.StartedAt = DateTime.UtcNow;
+            db.Entry(run).Property(r => r.StepStatuses).IsModified = true;
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        finally
+        {
+            dbLock.Release();
+        }
 
-        // Broadcast to WebSocket: Step is now running!
+        // Broadcast to SignalR
         await _hubContext.Clients.Group(runRoom).SendAsync("StepStatusUpdated", new
         {
             runId,
@@ -155,19 +175,28 @@ public class PipelineExecutionWorker : BackgroundService
             timestamp = DateTime.UtcNow
         }, cancellationToken);
 
-        await BroadcastLogAsync(runRoom, stepDef.StepId, $"--> Started step '{stepDef.Name}' (Estimated: {stepDef.EstimatedSeconds}s)", "info");
+        await BroadcastLogAsync(runRoom, stepDef.StepId, $"--> Started step '{stepDef.Name}' ({stepDef.EstimatedSeconds}s)", "info");
 
-        // B. Simulate real work & stream an in-progress log line
+        // B. Simulate real work in parallel (NO lock here, runs freely on separate threads!)
         await Task.Delay((stepDef.EstimatedSeconds * 1000) / 2, cancellationToken);
         await BroadcastLogAsync(runRoom, stepDef.StepId, $"[PROCESSING] Executing payload for '{stepDef.Name}'...", "info");
         await Task.Delay((stepDef.EstimatedSeconds * 1000) / 2, cancellationToken);
 
-        // C. Transition to Succeeded
-        stepStatus.State = ExecutionState.Succeeded;
-        stepStatus.CompletedAt = DateTime.UtcNow;
-        await db.SaveChangesAsync(cancellationToken);
+        // C. Transition to Succeeded (Lock DB for 1ms to save state)
+        await dbLock.WaitAsync(cancellationToken);
+        try
+        {
+            stepStatus.State = ExecutionState.Succeeded;
+            stepStatus.CompletedAt = DateTime.UtcNow;
+            db.Entry(run).Property(r => r.StepStatuses).IsModified = true;
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        finally
+        {
+            dbLock.Release();
+        }
 
-        // Broadcast to WebSocket: Step succeeded!
+        // Broadcast to SignalR
         await _hubContext.Clients.Group(runRoom).SendAsync("StepStatusUpdated", new
         {
             runId,

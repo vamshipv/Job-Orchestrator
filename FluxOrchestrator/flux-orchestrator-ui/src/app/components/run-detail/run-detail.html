@@ -1,0 +1,95 @@
+<div class="monitor-container">
+  <!-- Back Link -->
+  <div class="breadcrumb">
+    <a routerLink="/pipelines" class="back-link">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="19" y1="12" x2="5" y2="12"></line>
+        <polyline points="12 19 5 12 12 5"></polyline>
+      </svg>
+      <span>Back to Pipelines Catalog</span>
+    </a>
+  </div>
+
+  @if (isLoading()) {
+    <div class="loading-state">
+      <div class="spinner"></div>
+      <p>Connecting to execution monitor...</p>
+    </div>
+  } @else if (errorMessage()) {
+    <div class="alert alert-error">
+      <span>{{ errorMessage() }}</span>
+    </div>
+  } @else if (run()) {
+    <!-- Run Overview Card -->
+    <div class="overview-card">
+      <div class="overview-header">
+        <div>
+          <span class="eyebrow">Execution Run</span>
+          <h1 class="run-title font-mono">{{ runId() }}</h1>
+        </div>
+        <div class="status-badge" [class]="'badge-' + status().toLowerCase()">
+          <span class="status-indicator-dot"></span>
+          <span>{{ status() }}</span>
+        </div>
+      </div>
+
+      <!-- Progress Bar -->
+      <div class="progress-section">
+        <div class="progress-label">
+          <span>Overall Progress ({{ completedCount() }}/{{ totalSteps() }} Steps)</span>
+          <span class="percentage">{{ progressPercent() }}%</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" [style.width.%]="progressPercent()"></div>
+        </div>
+      </div>
+
+      <!-- Metadata Stats -->
+      <div class="stats-row">
+        <div class="stat-item">
+          <span class="stat-label">Started At</span>
+          <span class="stat-value">{{ run()?.startedAt | date:'mediumTime' }}</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Completed At</span>
+          <span class="stat-value">
+            {{ (run()?.completedAt | date:'mediumTime') || 'In Progress...' }}
+          </span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Execution Strategy</span>
+          <span class="stat-value">Asynchronous DAG Channel</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Steps Execution List -->
+    <div class="steps-section">
+      <h2 class="section-title">Step Execution Pipeline</h2>
+      <div class="steps-grid">
+        @for (step of steps(); track step.stepId; let idx = $index) {
+          <div class="step-card" [class]="'card-' + step.state.toLowerCase()">
+            <div class="step-card-header">
+              <span class="step-index">0{{ idx + 1 }}</span>
+              <span class="state-chip" [class]="'chip-' + step.state.toLowerCase()">
+                {{ step.state }}
+              </span>
+            </div>
+
+            <h3 class="step-name font-mono">{{ step.stepId }}</h3>
+
+            <div class="step-timing">
+              @if (step.state === 'Running') {
+                <span class="timing-text running-text">Executing task in background...</span>
+              } @else if (step.state === 'Succeeded') {
+                <span class="timing-text">Finished at {{ step.completedAt | date:'mediumTime' }}</span>
+              } @else {
+                <span class="timing-text text-muted">Waiting on dependencies...</span>
+              }
+            </div>
+          </div>
+        }
+      </div>
+    </div>
+  }
+</div>

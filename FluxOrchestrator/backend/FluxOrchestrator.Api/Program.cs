@@ -5,6 +5,11 @@ using FluxOrchestrator.Api.Services;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
+// Configure JSON serializer to output Enums as Strings ("Running", "Succeeded") instead of numbers (1, 2)
+builder.Services.ConfigureHttpJsonOptions(options =>
+{
+    options.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
+});
 
 // 1. Register OpenAPI / Swagger
 builder.Services.AddEndpointsApiExplorer();
