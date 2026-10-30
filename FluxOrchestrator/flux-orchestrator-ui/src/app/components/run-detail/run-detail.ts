@@ -2,12 +2,13 @@ import { Component, inject, OnInit, signal, computed, OnDestroy } from '@angular
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { DatePipe } from '@angular/common';
 import { PipelineApiService } from '../../services/pipeline-api.service';
-import { PipelineRun } from '../../models/pipeline.model';
+import { PipelineRun, PipelineStepDefinition } from '../../models/pipeline.model';
+import { ReactDagCanvasComponent } from '../../canvas/react-dag-canvas';
 
 @Component({
   selector: 'app-run-detail',
   standalone: true,
-  imports: [RouterLink, DatePipe],
+  imports: [RouterLink, DatePipe, ReactDagCanvasComponent],
   templateUrl: './run-detail.html',
   styleUrl: './run-detail.scss'
 })
@@ -15,30 +16,24 @@ export class RunDetailComponent implements OnInit, OnDestroy {
   private route = inject(ActivatedRoute);
   private api = inject(PipelineApiService);
 
-  // --- Angular Signals for Reactive State ---
   runId = signal<string>('');
   run = signal<PipelineRun | null>(null);
+  pipelineSteps = signal<PipelineStepDefinition[]>([]);
   isLoading = signal<boolean>(true);
   errorMessage = signal<string | null>(null);
 
   private pollInterval: any = null;
 
-  // --- Computed Signals (Derived State) ---
   status = computed(() => this.run()?.status ?? 'Queued');
-  
   steps = computed(() => this.run()?.stepStatuses ?? []);
-
   totalSteps = computed(() => this.steps().length);
-
   completedCount = computed(() => 
     this.steps().filter(s => s.state === 'Succeeded').length
   );
-
   progressPercent = computed(() => {
     const total = this.totalSteps();
     return total > 0 ? Math.round((this.completedCount() / total) * 100) : 0;
   });
-
   isCompleted = computed(() => 
     this.status() === 'Succeeded' || this.status() === 'Failed'
   );
@@ -49,7 +44,6 @@ export class RunDetailComponent implements OnInit, OnDestroy {
       this.runId.set(id);
       this.fetchRun();
 
-      // Poll every 1s until SignalR is wired on Day 7
       this.pollInterval = setInterval(() => {
         if (!this.isCompleted()) {
           this.fetchRun();
@@ -65,6 +59,13 @@ export class RunDetailComponent implements OnInit, OnDestroy {
       next: (data) => {
         this.run.set(data);
         this.isLoading.set(false);
+
+        // Fetch the pipeline blueprint if we haven't yet
+        if (this.pipelineSteps().length === 0 && data.pipelineId) {
+          this.api.getPipelineById(data.pipelineId).subscribe(p => {
+            this.pipelineSteps.set(p.steps);
+          });
+        }
       },
       error: (err) => {
         console.error('Failed to fetch run:', err);

@@ -63,9 +63,18 @@
       </div>
     </div>
 
-    <!-- Steps Execution List -->
+    <!-- Steps Execution List & React Canvas -->
     <div class="steps-section">
       <h2 class="section-title">Step Execution Pipeline</h2>
+
+      <!-- Embedded React Flow DAG Canvas -->
+      @if (pipelineSteps().length > 0) {
+        <app-react-dag-canvas 
+          [steps]="pipelineSteps()" 
+          [statuses]="steps()"
+        ></app-react-dag-canvas>
+      }
+
       <div class="steps-grid">
         @for (step of steps(); track step.stepId; let idx = $index) {
           <div class="step-card" [class]="'card-' + step.state.toLowerCase()">
